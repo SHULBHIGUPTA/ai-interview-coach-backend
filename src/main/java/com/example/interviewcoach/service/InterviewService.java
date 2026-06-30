@@ -8,6 +8,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.HttpServerErrorException;
 import org.springframework.web.client.RestTemplate;
 
 import java.util.List;
@@ -22,8 +24,11 @@ public class InterviewService {
     @Value("${gemini.api.key}")
     private String geminiApiKey;
 
-    private static final String GEMINI_URL =
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=";
+    @Value("${gemini.model}")
+    private String geminiModel;
+
+    private static final String GEMINI_BASE_URL =
+            "https://generativelanguage.googleapis.com/v1beta/models/";
 
     @Autowired
     public InterviewService(InterviewRepository interviewRepository) {
@@ -66,7 +71,7 @@ public class InterviewService {
 
     @SuppressWarnings("unchecked")
     private String callGemini(String prompt) {
-        String url = GEMINI_URL + geminiApiKey;
+        String url = GEMINI_BASE_URL + geminiModel + ":generateContent?key=" + geminiApiKey;
 
         Map<String, Object> part = Map.of("text", prompt);
         Map<String, Object> content = Map.of("parts", List.of(part));
@@ -76,19 +81,27 @@ public class InterviewService {
         headers.setContentType(MediaType.APPLICATION_JSON);
         HttpEntity<Map<String, Object>> entity = new HttpEntity<>(body, headers);
 
-        ResponseEntity<Map> response = restTemplate.postForEntity(url, entity, Map.class);
+        try {
+            ResponseEntity<Map> response = restTemplate.postForEntity(url, entity, Map.class);
 
-        if (response.getBody() != null) {
-            List<Map<String, Object>> candidates =
-                    (List<Map<String, Object>>) response.getBody().get("candidates");
-            if (candidates != null && !candidates.isEmpty()) {
-                Map<String, Object> contentObj = (Map<String, Object>) candidates.get(0).get("content");
-                List<Map<String, Object>> parts = (List<Map<String, Object>>) contentObj.get("parts");
-                if (parts != null && !parts.isEmpty()) {
-                    return (String) parts.get(0).get("text");
+            if (response.getBody() != null) {
+                List<Map<String, Object>> candidates =
+                        (List<Map<String, Object>>) response.getBody().get("candidates");
+                if (candidates != null && !candidates.isEmpty()) {
+                    Map<String, Object> contentObj = (Map<String, Object>) candidates.get(0).get("content");
+                    List<Map<String, Object>> parts = (List<Map<String, Object>>) contentObj.get("parts");
+                    if (parts != null && !parts.isEmpty()) {
+                        return (String) parts.get(0).get("text");
+                    }
                 }
             }
+            return "Unable to generate response.";
+        } catch (HttpClientErrorException e) {
+            throw new RuntimeException("Gemini API error (" + e.getStatusCode() + "): " + e.getResponseBodyAsString(), e);
+        } catch (HttpServerErrorException e) {
+            throw new RuntimeException("Gemini server error (" + e.getStatusCode() + "): " + e.getResponseBodyAsString(), e);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to call Gemini API: " + e.getMessage(), e);
         }
-        return "Unable to generate response.";
     }
 }
